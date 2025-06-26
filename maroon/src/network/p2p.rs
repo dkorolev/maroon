@@ -32,6 +32,7 @@ use libp2p::{
 use libp2p_request_response::{Message as RequestResponseMessage, ProtocolSupport};
 use log::{debug, error, info, warn};
 use opentelemetry::{KeyValue, global, metrics::Counter};
+use schema::mn_events::{LogEvent, LogEventBody, now_microsec};
 use serde::{Deserialize, Serialize};
 use std::sync::OnceLock;
 use std::{collections::HashSet, fmt::Debug, time::Duration};
@@ -174,6 +175,7 @@ impl P2P {
                   &to_app,
                   &mut alive_peer_ids,
                   &mut alive_gateway_ids,
+                  self.peer_id,
               );
           }
       }
@@ -215,6 +217,7 @@ fn handle_swarm_event(
   to_app: &UnboundedSender<Inbox>,
   alive_peer_ids: &mut HashSet<PeerId>,
   alive_gateway_ids: &mut HashSet<PeerId>,
+  id: PeerId,
 ) {
   match event {
     SwarmEvent::Behaviour(MaroonEvent::Gossipsub(GossipsubEvent::Message { message, .. })) => {
@@ -232,7 +235,7 @@ fn handle_swarm_event(
     }
     SwarmEvent::Behaviour(MaroonEvent::MetaExchange(meta_exchange)) => {
       counter_requests().add(1, &[KeyValue::new("type", "meta_exchange")]);
-      handle_meta_exchange(swarm, meta_exchange, alive_peer_ids, alive_gateway_ids, to_app);
+      handle_meta_exchange(id, swarm, meta_exchange, alive_peer_ids, alive_gateway_ids, to_app);
     }
     SwarmEvent::Behaviour(MaroonEvent::Ping(PingEvent { .. })) => {
       // TODO: have an idea to use result.duration for calculating logical time between nodes. let's see
@@ -249,7 +252,13 @@ fn handle_swarm_event(
       swarm.behaviour_mut().meta_exchange.send_request(&peer_id, MERequest { role: Role::Node });
     }
     SwarmEvent::ConnectionClosed { peer_id, .. } => {
-      alive_gateway_ids.remove(&peer_id);
+      if alive_gateway_ids.remove(&peer_id) {
+        state_log::log(LogEvent {
+          timestamp_micros: now_microsec(),
+          emitter: id,
+          body: LogEventBody::GatewayDisconnected { gid: peer_id },
+        });
+      }
       if alive_peer_ids.remove(&peer_id) {
         _ = to_app.send(Inbox::Nodes(alive_peer_ids.clone()));
       }
@@ -309,6 +318,7 @@ fn handle_request_response(
 }
 
 fn handle_meta_exchange(
+  id: PeerId,
   swarm: &mut Swarm<MaroonBehaviour>,
   meta_exchange: MEEvent,
   alive_node_ids: &mut HashSet<PeerId>,
@@ -322,6 +332,11 @@ fn handle_meta_exchange(
   let mut insert_by_role = |role: Role| match role {
     Role::Gateway => {
       alive_gateway_ids.insert(peer);
+      state_log::log(LogEvent {
+        timestamp_micros: now_microsec(),
+        emitter: id,
+        body: LogEventBody::GatewayConnected { gid: peer },
+      });
     }
     Role::Node => {
       alive_node_ids.insert(peer);

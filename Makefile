@@ -54,6 +54,7 @@ run-local: # runs maroon node locally on a specified port
 	NODE_URLS=${NODE_URLS} \
 	ETCD_URLS=${ETCD_URLS} \
 	SELF_URL=/ip4/127.0.0.1/tcp/${PORT} \
+	REDIS_URL=redis://127.0.0.1:6379 \
 	RUST_LOG=maroon=debug,epoch_coordinator=debug \
 	CONSENSUS_NODES=${CONSENSUS_NODES} \
 		cargo run -p maroon $(PROFILE_FLAG)
@@ -61,6 +62,7 @@ run-local: # runs maroon node locally on a specified port
 run-gateway: # runs gateway imitation
 	KEY_RANGE=${KEY_RANGE} \
 	NODE_URLS=${NODE_URLS} \
+	REDIS_URL=redis://127.0.0.1:6379 \
 	RUST_LOG=gateway=debug \
 		cargo run -p gateway $(PROFILE_FLAG)
 
@@ -80,11 +82,20 @@ start-metrics-stack: # starts OTLP collector, prometheus, grafana
 shutdown-metrics-stack: # shuts down OTLP collector, prometheus, grafana
 	docker compose -f metrics/docker-compose.yaml down -v
 
+.PHONY: start-redis
+start-redis: # starts Redis in docker compose for state log
+	docker compose -f state_log/docker/redis/docker-compose.yaml up -d
+
+.PHONY: shutdown-redis
+shutdown-redis: # shuts down Redis docker compose
+	docker compose -f state_log/docker/redis/docker-compose.yaml down -v
+
+
 .PHONY: start-compose
-start-compose: start-test-etcd start-metrics-stack
+start-compose: start-test-etcd start-metrics-stack start-redis
 
 .PHONY: shutdown-compose
-shutdown-compose: shutdown-metrics-stack shutdown-test-etcd
+shutdown-compose: shutdown-metrics-stack shutdown-test-etcd shutdown-redis
 
 fmt: # formatter
 	cargo fmt --all
